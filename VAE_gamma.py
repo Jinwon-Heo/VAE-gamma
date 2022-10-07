@@ -154,20 +154,14 @@ def generate_gamma(al, be, device):
                     u[torch.where(index1 & index2)] =  u_new[torch.where(index1 & index2)]
                     continue
             return (d*v)/(be+1e-6) 
-        
-        
-        
-def clusterAcc(Y_pred, Y):
-    assert Y_pred.shape[0] == Y.shape[0]
-    D = max(Y_pred.max(), Y.max())+1
-    w = np.zeros((D,D), dtype=np.int64)
-    for i in range(Y_pred.shape[0]):
-        w[Y_pred[i], Y[i]] += 1
-    rowMax, _ = torch.max(torch.tensor(w), dim = 1)
-    return sum(rowMax)*1.0 /Y_pred.shape[0], w
 
+
+        
 
 def cluster_acc(Y_pred, Y):
+    
+#     Y_pred = Y_pred.astype(np.int64)
+#     Y = Y.astype(np.int64)
     assert Y_pred.shape[0] == Y.shape[0]
     D = max(Y_pred.max(), Y.max())+1
     w = np.zeros((D,D), dtype=np.int64)
@@ -181,19 +175,9 @@ def cluster_acc(Y_pred, Y):
 
 
 class EarlyStopping:
-    """주어진 patience 이후로 validation loss가 개선되지 않으면 학습을 조기 중지"""
+    
     def __init__(self, patience=7, verbose=False, delta=0, path='checkpoint_mnist.pt'):
-        """
-        Args:
-            patience (int): validation loss가 개선된 후 기다리는 기간
-                            Default: 7
-            verbose (bool): True일 경우 각 validation loss의 개선 사항 메세지 출력
-                            Default: False
-            delta (float): 개선되었다고 인정되는 monitered quantity의 최소 변화
-                            Default: 0
-            path (str): checkpoint저장 경로
-                            Default: 'checkpoint.pt'
-        """
+
         self.patience = patience
         self.verbose = verbose
         self.counter = 0
@@ -221,9 +205,8 @@ class EarlyStopping:
             self.counter = 0
 
     def save_checkpoint(self, val_loss, model):
-        '''validation loss가 감소하면 모델을 저장한다.'''
-#         if self.verbose:
-#             print(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}).  Saving model ...')
+        if self.verbose:
+            print(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}).  Saving model ...')
         torch.save(model.state_dict(), self.path)
         self.val_loss_min = val_loss
         
@@ -262,7 +245,6 @@ class VAE_gamma(nn.Module):
         h3 = F.relu(self.fc3(h2))
         m = nn.Softplus()
         return 1e-6 + m(self.fc41(h3)), 1e-6 + m(self.fc42(h3))
-#         return self.fc41(h3), self.fc42(h3)
     
     def decode(self, z):
         h4 = F.relu(self.fc4(z))
@@ -342,7 +324,7 @@ class VAE_gamma(nn.Module):
         return recon_loss
     
     
-def pretrain_fit(dataloader, pre_model,optimizer_auto,scheduler,path_name,pretrain_epoch,monte_number,num_cluster,device,verbose=False):
+def pretrain_fit(dataloader, pre_model, optimizer_auto, scheduler, path_name, pretrain_epoch, monte_number, num_cluster, device, verbose=False):
     
     
     for epoch in range(pretrain_epoch):
@@ -366,8 +348,7 @@ def pretrain_fit(dataloader, pre_model,optimizer_auto,scheduler,path_name,pretra
             monte_recon_loss = 0
             for l in range(monte_number):
                 z_l = pre_model.reparametrize(logalpha, logbeta)
-    #             recon_al_l = model.decode(z)
-    #             monte_recon_loss += F.binary_cross_entropy(recon_al_l, img, reduction='sum')
+
                 m = nn.Softplus()
                 recon_al_l = 1e-6 + m(pre_model.decode(z_l)[:,:pre_model.data_dim])
                 recon_be_l = 1e-6 + m(pre_model.decode(z_l)[:,pre_model.data_dim:])
@@ -376,10 +357,7 @@ def pretrain_fit(dataloader, pre_model,optimizer_auto,scheduler,path_name,pretra
 
             loss = torch.mean(monte_recon_loss/monte_number)
 
-    #         loss = criterion(img, recon_x)
-    #         loss = model.recon_loss(recon_al, img)       
-    #         loss = torch.mean(loss) #+ 0.1*pre_model.Loss_b(img, z, logalpha, logbeta, 10, latent_dim))
-    #         loss = F.binary_cross_entropy(recon_al, img, reduction='sum')
+
             train_loss += loss.item()
 
             optimizer_auto.zero_grad()
@@ -387,12 +365,6 @@ def pretrain_fit(dataloader, pre_model,optimizer_auto,scheduler,path_name,pretra
             optimizer_auto.step()
         scheduler.step()
         
-#         early_stopping(train_loss / len(dataloader.dataset), pre_model)
-
-#         if early_stopping.early_stop:
-#             print("Early stopping")
-#             break
-    #     scheduler.step()
     
         if verbose == True:
             print('Epoch: {} loss: {:.3f}'
@@ -401,7 +373,12 @@ def pretrain_fit(dataloader, pre_model,optimizer_auto,scheduler,path_name,pretra
     x = torch.Tensor([])
     y = torch.Tensor([])
     for sample,label in dataloader:
-        data = sample
+        data = sample.cpu().detach().numpy().astype(np.float32)
+        data = torch.Tensor(data)
+        print(data.shape)
+        
+        label = label.cpu().detach().numpy().astype(np.float32)
+        label = torch.Tensor(label)
         x = torch.cat([x,data])
         y = torch.cat([y,label])
         
@@ -412,17 +389,14 @@ def pretrain_fit(dataloader, pre_model,optimizer_auto,scheduler,path_name,pretra
         if torch.cuda.is_available():
             x = x.cuda(device)
 
-    #     z, recon_al, recon_be = pre_model(x)
         recon_al,recon_be, logalpha, logbeta, z = pre_model(x)
 
     z = z.cpu()
 
     pre_model = pre_model.cpu()
-    stateDict = pre_model.state_dict()
+    
     gmm = GaussianMixture(n_components=num_cluster , covariance_type='diag').fit(z)    
-#     print(f'\n# Pretraining finished.. ')
 
-#     model.load_state_dict(stateDict, strict = False)
     pre_model.c_prior.data = (torch.from_numpy(gmm.weights_)).float()
     z_mu = torch.transpose(torch.from_numpy(gmm.means_).float(),0,1)
     z_var = torch.transpose(torch.from_numpy(gmm.covariances_).float(),0,1)
@@ -446,24 +420,26 @@ def pretrain_fit(dataloader, pre_model,optimizer_auto,scheduler,path_name,pretra
     
     
     
-def train_model(dataloader, dataloader_test, model, optimizer,scheduler, epoch_train,batch_size,monte_number,mean_num,device,path_name_2='checkpoint_model.pth'):
+def train_model(dataloader, dataloader_test, model, optimizer, scheduler, epoch_train, batch_size, monte_number, mean_num, device, path_name_2='checkpoint_model.pth'):
     
-    early_stopping = EarlyStopping(patience = 7, verbose = True, delta = 0.001,path=path_name_2)
+    early_stopping = EarlyStopping(patience = 7, verbose = False, delta = 0.001,path=path_name_2)
     
     for epoch in range(epoch_train):    
 
-        label_set = torch.tensor([],dtype=int).cuda(device)
-        preds_set = torch.tensor([],dtype=int).cuda(device)
+        label_set = torch.tensor([]).cuda(device)
+        preds_set = torch.tensor([]).cuda(device)
         train_loss = 0
         running_correct = 0
-        label_set = torch.tensor([],dtype=int).cuda(device)
-        preds_set= torch.tensor([],dtype=int).cuda(device)
+        label_set = torch.tensor([]).cuda(device)
+        preds_set= torch.tensor([]).cuda(device)
         
         for batch_idx, data in enumerate(dataloader):
             model.train()
             img, label = data
             img = img.float()
             img = img.view(img.size(0), -1)
+            label = label.cpu().detach().numpy().astype(np.float32)
+            label = torch.Tensor(label)
 
             if torch.cuda.is_available():
                 img = img.cuda(device)
@@ -490,16 +466,20 @@ def train_model(dataloader, dataloader_test, model, optimizer,scheduler, epoch_t
                                    + model.kl_loss(sgvb_gamma, logalpha, logbeta ,batch_size)) #+ 1*model.Loss_b(img, z, logalpha, logbeta, 10, latent_dim))
 
             _, preds = torch.max(sgvb_gamma,1)
-            label_set = torch.cat((label_set,label)).int()
-            preds_set = torch.cat((preds_set,preds)).int()
+            
+            preds = preds.cpu().detach().numpy().astype(np.float32)
+            preds = torch.Tensor(preds).cuda(device)
+            
+            label_set = torch.cat([label_set,label])
+            preds_set = torch.cat([preds_set,preds])
             train_loss += sgvb_loss.item() * img.size(0)
 
             sgvb_loss.backward()
             optimizer.step()
         scheduler.step()
     
-        
-
+        label_set = label_set.cpu().detach().numpy().astype(np.int64)
+        preds_set = preds_set.cpu().detach().numpy().astype(np.int64)
         train_acc = cluster_acc(preds_set,label_set) * 100/preds_set.shape[0]
 #         if epoch == 1 or epoch%30 == 0:
 #         print('Epoch: {} loss: {:.3f} accuracy: {:.3f}'
@@ -513,17 +493,20 @@ def train_model(dataloader, dataloader_test, model, optimizer,scheduler, epoch_t
         for perform in range(0,mean_num):
             test_loss = 0.0
             test_running_correct = 0.0
-            label_set_test = torch.tensor([],dtype=int).cuda(device)
-            preds_set_test = torch.tensor([],dtype=int).cuda(device)
+            label_set_test = torch.tensor([]).cuda(device)
+            preds_set_test = torch.tensor([]).cuda(device)
             for batch_idx, data in enumerate(dataloader_test):
 
-                img, label = data 
+                img, label = data
+                label=label.cpu().detach().numpy().astype(np.float32)
+                label = torch.Tensor(label)
+                
                 img = img.float()
                 img = img.view(img.size(0), -1)
 
                 if torch.cuda.is_available():
                     img = img.cuda(device)
-                    label = label.cuda(device).float()
+                    label = label.cuda(device)
 
                 recon_al,recon_be, logalpha, logbeta, z = model(img)
                 monte_gamma = 0
@@ -540,14 +523,17 @@ def train_model(dataloader, dataloader_test, model, optimizer,scheduler, epoch_t
                                             + model.kl_loss(sgvb_gamma_test, logalpha, logbeta,len(dataloader_test.dataset))) #+ 1*model.Loss_b(img,z, logalpha, logbeta, 2, latent_dim))
 
                 _, preds = torch.max(sgvb_gamma_test,1)
+                
+                preds=preds.cpu().detach().numpy().astype(np.float32)
+                preds = torch.Tensor(preds).cuda(device)
 
-                label_set_test = torch.cat((label_set_test,label)).int()
-                preds_set_test = torch.cat((preds_set_test,preds)).int()
+                label_set_test = torch.cat([label_set_test,label])
+                preds_set_test = torch.cat([preds_set_test,preds])
                 test_loss += sgvb_loss_test.item() * img.size(0)
 
             
-            label_set_test = label_set_test.cpu()
-            preds_set_test = preds_set_test.cpu()
+            label_set_test = label_set_test.cpu().detach().numpy().astype(np.int64)
+            preds_set_test = preds_set_test.cpu().detach().numpy().astype(np.int64)
 
             test_acc = cluster_acc(preds_set_test,label_set_test) * 100/preds_set_test.shape[0]
             test_loss_sum += test_loss
@@ -565,23 +551,12 @@ def train_model(dataloader, dataloader_test, model, optimizer,scheduler, epoch_t
     print('***** Test Result: loss: {:.3f} acc: {:.4f}'
           .format( early_stopping.val_loss_min, accuracy_list[0]))
     
-    return early_stopping.val_loss_min
-#     if epoch % scheduler.step_size == 0:
-#         print(f'\n## Learning rate decay.. lr : {scheduler.get_last_lr()[0]}')
-
-
-        
-
-#     if early_stopping.early_stop:
-#         print("Early stopping")
-#         break
-    
-# model.load_state_dict(torch.load('checkpoint_mnist.pt'))    
+    return early_stopping.val_loss_min  
     
 
     
-def cv_result_1(model,x_data,y_data,batch_size,monte_number,random_state,path_name, latent_dim,num_cluster,device,
-                initial_num = 5, mean_num=10,pretrain_epoch=30,epoch_train=100,n_splits=3,lr=0.001,step_size=20,gamma=0.9,shuffle=True):
+def cv_result(model, x_data, y_data, batch_size, monte_number, random_state, path_name, latent_dim, num_cluster, device,
+                initial_num = 5, mean_num=10, pretrain_epoch=30, epoch_train=100, n_splits=3, lr=0.001, step_size=20, gamma=0.9, shuffle=True):
     cv_loss = np.array([])
 
     kfold = KFold(n_splits=n_splits,shuffle=shuffle,random_state = random_state)
